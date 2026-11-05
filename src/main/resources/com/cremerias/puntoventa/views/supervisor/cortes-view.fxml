@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.ScrollPane?>
+<?import javafx.scene.layout.VBox?>
+
+<!-- Cortes de caja: cajas abiertas y cortes realizados. El contenido lo arma el controlador. -->
+<ScrollPane fx:id="scroll" styleClass="pagina-desplazable" fitToWidth="true" hbarPolicy="NEVER"
+            xmlns:fx="http://javafx.com/fxml"
+            fx:controller="com.cremerias.puntoventa.ui.supervisor.CortesController">
+    <VBox fx:id="pagina" styleClass="pagina" spacing="16"/>
+</ScrollPane>

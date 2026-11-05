@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.MenuButton?>
+<?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.StackPane?>
+<?import org.kordamp.ikonli.javafx.FontIcon?>
+
+<!-- Marco común después de iniciar sesión: menú lateral del rol (si tiene) a toda la altura;
+     barra superior con la ruta, la conexión y el menú de usuario; contenido del rol al centro. -->
+<BorderPane styleClass="marco" xmlns:fx="http://javafx.com/fxml"
+            fx:controller="com.cremerias.puntoventa.ui.InicioController">
+    <left>
+        <StackPane fx:id="lateral" managed="false" visible="false"/>
+    </left>
+    <center>
+        <BorderPane>
+            <top>
+                <HBox fx:id="barraSuperior" styleClass="barra-superior">
+                    <!-- Ruta de la sección (con menú lateral) -->
+                    <HBox fx:id="ruta" spacing="8" alignment="CENTER_LEFT" managed="false" visible="false">
+                        <Label fx:id="rutaGrupo" styleClass="ruta-grupo"/>
+                        <FontIcon fx:id="rutaSeparador" iconLiteral="mdi2c-chevron-right" styleClass="ruta-separador"/>
+                        <Label fx:id="rutaPagina" styleClass="ruta-pagina"/>
+                    </HBox>
+                    <!-- Marca (caja, sin menú lateral) -->
+                    <HBox fx:id="marca" styleClass="barra-marca" managed="false" visible="false">
+                        <StackPane styleClass="marca-icono">
+                            <FontIcon iconLiteral="mdi2c-cheese"/>
+                        </StackPane>
+                        <Label text="Cremería" styleClass="marca-nombre"/>
+                        <Label fx:id="marcaLugar" styleClass="marca-lugar"/>
+                    </HBox>
+
+                    <Region HBox.hgrow="ALWAYS"/>
+
+                    <HBox fx:id="barraEstado" alignment="CENTER_LEFT" spacing="8"/>
+                    <Region styleClass="divisor-vertical"/>
+                    <MenuButton fx:id="menuUsuario" styleClass="menu-usuario"/>
+                </HBox>
+            </top>
+            <center>
+                <StackPane fx:id="contenido" styleClass="contenido-principal"/>
+            </center>
+        </BorderPane>
+    </center>
+</BorderPane>

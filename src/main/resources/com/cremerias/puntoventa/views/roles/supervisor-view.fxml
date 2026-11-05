@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.layout.StackPane?>
+
+<!-- Panel del supervisor: vender en caja, cortes de su sucursal, productos, indicadores y accesos.
+     El menú lateral lo arma el controlador y el marco común lo coloca a la izquierda. -->
+<StackPane fx:id="contenido" styleClass="panel-supervisor" xmlns:fx="http://javafx.com/fxml"
+           fx:controller="com.cremerias.puntoventa.ui.supervisor.SupervisorController"/>

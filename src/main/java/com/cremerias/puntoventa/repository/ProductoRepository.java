@@ -1,0 +1,418 @@
+package com.cremerias.puntoventa.repository;
+
+import com.cremerias.puntoventa.model.AvisoSinVenta;
+import com.cremerias.puntoventa.model.Disponibilidad;
+import com.cremerias.puntoventa.model.Presentacion;
+import com.cremerias.puntoventa.model.ProductoCatalogo;
+import com.cremerias.puntoventa.model.Temporada;
+import com.cremerias.puntoventa.model.Unidad;
+import com.cremerias.puntoventa.util.Ids;
+import com.cremerias.puntoventa.util.Tiempo;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Types;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/** Catálogo de productos, categorías y presentaciones (administrado por el almacén). */
+public class ProductoRepository {
+
+    public record Categoria(String id, String nombre) {
+        @Override
+        public String toString() {
+            return nombre;
+        }
+    }
+
+    public List<ProductoCatalogo> listar(Connection c) throws SQLException {
+        Map<String, List<Presentacion>> presentaciones = presentaciones(c, null);
+        List<ProductoCatalogo> lista = new ArrayList<>();
+        try (PreparedStatement ps = c.prepareStatement("""
+                SELECT p.id, p.nombre, p.categoria_id, c.nombre AS categoria, p.marca, p.clave, p.codigo_inventario,
+                       p.unidad, p.sujeto_merma, p.disponibilidad, p.activo, p.gramaje_gramos, p.merma_gramos,
+                       p.aviso_plazo, p.aviso_unidad, p.aviso_admin, p.aviso_supervisor, p.aviso_caja,
+                       p.temporada_desde, p.temporada_fin, p.temporada_repetir_cada, p.temporada_repetir_unidad
+                FROM productos p LEFT JOIN categorias c ON c.id = p.categoria_id
+                WHERE p.eliminado_en IS NULL
+                ORDER BY p.nombre COLLATE NOCASE""");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                lista.add(mapear(rs, presentaciones.getOrDefault(rs.getString("id"), List.of())));
+            }
+        }
+        return lista;
+    }
+
+    public Optional<ProductoCatalogo> porId(Connection c, String id) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("""
+                SELECT p.id, p.nombre, p.categoria_id, c.nombre AS categoria, p.marca, p.clave, p.codigo_inventario,
+                       p.unidad, p.sujeto_merma, p.disponibilidad, p.activo, p.gramaje_gramos, p.merma_gramos,
+                       p.aviso_plazo, p.aviso_unidad, p.aviso_admin, p.aviso_supervisor, p.aviso_caja,
+                       p.temporada_desde, p.temporada_fin, p.temporada_repetir_cada, p.temporada_repetir_unidad
+                FROM productos p LEFT JOIN categorias c ON c.id = p.categoria_id
+                WHERE p.id = ? AND p.eliminado_en IS NULL""")) {
+            ps.setString(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next()
+                        ? Optional.of(mapear(rs, presentaciones(c, id).getOrDefault(id, List.of())))
+                        : Optional.empty();
+            }
+        }
+    }
+
+    private Map<String, List<Presentacion>> presentaciones(Connection c, String productoId) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("""
+                SELECT id, producto_id, nombre, tipo, factor, codigo_barras, es_principal, activo, merma_pct
+                FROM presentaciones
+                WHERE eliminado_en IS NULL AND (? IS NULL OR producto_id = ?)
+                ORDER BY es_principal DESC, factor, nombre""")) {
+            ps.setString(1, productoId);
+            ps.setString(2, productoId);
+            try (ResultSet rs = ps.executeQuery()) {
+                Map<String, List<Presentacion>> mapa = new LinkedHashMap<>();
+                while (rs.next()) {
+                    mapa.computeIfAbsent(rs.getString("producto_id"), k -> new ArrayList<>()).add(new Presentacion(
+                            rs.getString("id"), rs.getString("producto_id"), rs.getString("nombre"),
+                            "GRANEL".equals(rs.getString("tipo")), decimal(rs, "factor"),
+                            rs.getString("codigo_barras"), rs.getBoolean("es_principal"), rs.getBoolean("activo"),
+                            porcentaje(rs.getDouble("merma_pct"))));
+                }
+                return mapa;
+            }
+        }
+    }
+
+    public List<Categoria> categorias(Connection c) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT id, nombre FROM categorias WHERE eliminado_en IS NULL ORDER BY orden, nombre");
+             ResultSet rs = ps.executeQuery()) {
+            List<Categoria> lista = new ArrayList<>();
+            while (rs.next()) {
+                lista.add(new Categoria(rs.getString(1), rs.getString(2)));
+            }
+            return lista;
+        }
+    }
+
+    /** Devuelve el id de la categoría con ese nombre, creándola si no existe. */
+    public String categoria(Connection c, String nombre) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT id FROM categorias WHERE nombre = ? COLLATE NOCASE")) {
+            ps.setString(1, nombre.strip());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        }
+        String id = Ids.nuevo();
+        insertarCategoria(c, id, nombre.strip(), null, 99);
+        return id;
+    }
+
+    public void insertarCategoria(Connection c, String id, String nombre, String color, int orden)
+            throws SQLException {
+        String ahora = Tiempo.ahora();
+        try (PreparedStatement ps = c.prepareStatement("""
+                INSERT INTO categorias (id, nombre, color, orden, creado_en, actualizado_en)
+                VALUES (?, ?, ?, ?, ?, ?)""")) {
+            ps.setString(1, id);
+            ps.setString(2, nombre);
+            ps.setString(3, color);
+            ps.setInt(4, orden);
+            ps.setString(5, ahora);
+            ps.setString(6, ahora);
+            ps.executeUpdate();
+        }
+    }
+
+    public void insertar(Connection c, String id, String nombre, String categoriaId, String marca, String clave,
+                         String codigoInventario, Unidad unidad, boolean sujetoMerma, Disponibilidad disponibilidad,
+                         BigDecimal gramaje, BigDecimal merma) throws SQLException {
+        String ahora = Tiempo.ahora();
+        try (PreparedStatement ps = c.prepareStatement("""
+                INSERT INTO productos (id, nombre, categoria_id, marca, clave, codigo_inventario, unidad,
+                                       precio_centavos, sujeto_merma, disponibilidad, gramaje_gramos, merma_gramos,
+                                       creado_en, actualizado_en)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)""")) {
+            ps.setString(1, id);
+            ps.setString(2, nombre);
+            ps.setString(3, categoriaId);
+            ps.setString(4, marca);
+            ps.setString(5, clave);
+            ps.setString(6, codigoInventario);
+            ps.setString(7, unidad.name());
+            ps.setBoolean(8, sujetoMerma);
+            ps.setString(9, disponibilidad.name());
+            ps.setBigDecimal(10, gramaje);
+            ps.setBigDecimal(11, merma);
+            ps.setString(12, ahora);
+            ps.setString(13, ahora);
+            ps.executeUpdate();
+        }
+    }
+
+    public void actualizar(Connection c, String id, String nombre, String categoriaId, String marca, String clave,
+                           String codigoInventario, boolean sujetoMerma, Disponibilidad disponibilidad,
+                           BigDecimal gramaje, BigDecimal merma) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE productos SET nombre = ?, categoria_id = ?, marca = ?, clave = ?, codigo_inventario = ?,
+                                     sujeto_merma = ?, disponibilidad = ?, gramaje_gramos = ?, merma_gramos = ?,
+                                     actualizado_en = ?
+                WHERE id = ?""")) {
+            ps.setString(1, nombre);
+            ps.setString(2, categoriaId);
+            ps.setString(3, marca);
+            ps.setString(4, clave);
+            ps.setString(5, codigoInventario);
+            ps.setBoolean(6, sujetoMerma);
+            ps.setString(7, disponibilidad.name());
+            ps.setBigDecimal(8, gramaje);
+            ps.setBigDecimal(9, merma);
+            ps.setString(10, Tiempo.ahora());
+            ps.setString(11, id);
+            ps.executeUpdate();
+        }
+    }
+
+    public void cambiarActivo(Connection c, String id, boolean activo) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE productos SET activo = ?, actualizado_en = ? WHERE id = ?")) {
+            ps.setBoolean(1, activo);
+            ps.setString(2, Tiempo.ahora());
+            ps.setString(3, id);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Borrado lógico: el producto deja de verse pero su historial se conserva. */
+    public void eliminar(Connection c, String id) throws SQLException {
+        String ahora = Tiempo.ahora();
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE productos SET eliminado_en = ?, activo = 0, clave = NULL, codigo_inventario = NULL,
+                                     actualizado_en = ?
+                WHERE id = ?""")) {
+            ps.setString(1, ahora);
+            ps.setString(2, ahora);
+            ps.setString(3, id);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE presentaciones SET eliminado_en = ?, activo = 0, codigo_barras = NULL, actualizado_en = ?
+                WHERE producto_id = ? AND eliminado_en IS NULL""")) {
+            ps.setString(1, ahora);
+            ps.setString(2, ahora);
+            ps.setString(3, id);
+            ps.executeUpdate();
+        }
+    }
+
+    public void insertarPresentacion(Connection c, Presentacion p) throws SQLException {
+        String ahora = Tiempo.ahora();
+        try (PreparedStatement ps = c.prepareStatement("""
+                INSERT INTO presentaciones (id, producto_id, nombre, tipo, factor, codigo_barras, es_principal, activo,
+                                            creado_en, actualizado_en, merma_pct)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")) {
+            ps.setString(1, p.id());
+            ps.setString(2, p.productoId());
+            ps.setString(3, p.nombre());
+            ps.setString(4, p.granel() ? "GRANEL" : "UNIDAD");
+            ps.setBigDecimal(5, p.factor());
+            ps.setString(6, vacioANull(p.codigoBarras()));
+            ps.setBoolean(7, p.principal());
+            ps.setBoolean(8, p.activo());
+            ps.setString(9, ahora);
+            ps.setString(10, ahora);
+            ps.setBigDecimal(11, p.mermaPct());
+            ps.executeUpdate();
+        }
+    }
+
+    public void actualizarPresentacion(Connection c, Presentacion p) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE presentaciones SET nombre = ?, tipo = ?, factor = ?, codigo_barras = ?, es_principal = ?,
+                                          activo = ?, actualizado_en = ?, merma_pct = ?
+                WHERE id = ?""")) {
+            ps.setString(1, p.nombre());
+            ps.setString(2, p.granel() ? "GRANEL" : "UNIDAD");
+            ps.setBigDecimal(3, p.factor());
+            ps.setString(4, vacioANull(p.codigoBarras()));
+            ps.setBoolean(5, p.principal());
+            ps.setBoolean(6, p.activo());
+            ps.setString(7, Tiempo.ahora());
+            ps.setBigDecimal(8, p.mermaPct());
+            ps.setString(9, p.id());
+            ps.executeUpdate();
+        }
+    }
+
+    public void eliminarPresentacion(Connection c, String id) throws SQLException {
+        String ahora = Tiempo.ahora();
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE presentaciones SET eliminado_en = ?, activo = 0, codigo_barras = NULL, actualizado_en = ?
+                WHERE id = ?""")) {
+            ps.setString(1, ahora);
+            ps.setString(2, ahora);
+            ps.setString(3, id);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Nombre del producto que ya usa esa clave o código de barras (para avisar duplicados). */
+    public Optional<String> usoDeClave(Connection c, String clave, String excluirProductoId) throws SQLException {
+        return uso(c, "SELECT nombre FROM productos WHERE clave = ? COLLATE NOCASE AND id <> ?", clave, excluirProductoId);
+    }
+
+    public Optional<String> usoDeCodigoInventario(Connection c, String codigoInventario, String excluirProductoId)
+            throws SQLException {
+        return uso(c, "SELECT nombre FROM productos WHERE codigo_inventario = ? COLLATE NOCASE AND id <> ?",
+                codigoInventario, excluirProductoId);
+    }
+
+    public Optional<String> usoDeCodigo(Connection c, String codigo, String excluirPresentacionId) throws SQLException {
+        return uso(c, """
+                SELECT p.nombre || ' · ' || pr.nombre FROM presentaciones pr JOIN productos p ON p.id = pr.producto_id
+                WHERE pr.codigo_barras = ? AND pr.id <> ?""", codigo, excluirPresentacionId);
+    }
+
+    private static Optional<String> uso(Connection c, String sql, String valor, String excluir) throws SQLException {
+        if (valor == null || valor.isBlank()) {
+            return Optional.empty();
+        }
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, valor.strip());
+            ps.setString(2, excluir == null ? "" : excluir);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+            }
+        }
+    }
+
+    public int contar(Connection c) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT COUNT(*) FROM productos");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    public Map<String, String> nombres(Connection c) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT id, nombre FROM productos");
+             ResultSet rs = ps.executeQuery()) {
+            Map<String, String> mapa = new HashMap<>();
+            while (rs.next()) {
+                mapa.put(rs.getString(1), rs.getString(2));
+            }
+            return mapa;
+        }
+    }
+
+    private static ProductoCatalogo mapear(ResultSet rs, List<Presentacion> presentaciones) throws SQLException {
+        return new ProductoCatalogo(rs.getString("id"), rs.getString("nombre"), rs.getString("categoria_id"),
+                rs.getString("categoria"), rs.getString("marca"), rs.getString("clave"), rs.getString("codigo_inventario"),
+                Unidad.valueOf(rs.getString("unidad")), rs.getBoolean("sujeto_merma"),
+                Disponibilidad.valueOf(rs.getString("disponibilidad")), temporada(rs), rs.getBoolean("activo"),
+                List.copyOf(presentaciones), gramos(rs, "gramaje_gramos"),
+                gramos(rs, "merma_gramos") == null ? BigDecimal.ZERO : gramos(rs, "merma_gramos"), aviso(rs));
+    }
+
+    private static AvisoSinVenta aviso(ResultSet rs) throws SQLException {
+        int plazo = rs.getInt("aviso_plazo");
+        if (rs.wasNull() || rs.getString("aviso_unidad") == null) {
+            return null;
+        }
+        return new AvisoSinVenta(plazo, AvisoSinVenta.Unidad.valueOf(rs.getString("aviso_unidad")),
+                rs.getBoolean("aviso_admin"), rs.getBoolean("aviso_supervisor"), rs.getBoolean("aviso_caja"));
+    }
+
+    private static Temporada temporada(ResultSet rs) throws SQLException {
+        String desde = rs.getString("temporada_desde");
+        String fin = rs.getString("temporada_fin");
+        if (desde == null || fin == null) {
+            return null;
+        }
+        int repetirCada = rs.getInt("temporada_repetir_cada");
+        Integer cada = rs.wasNull() ? null : repetirCada;
+        String unidad = rs.getString("temporada_repetir_unidad");
+        return new Temporada(LocalDate.parse(desde), LocalDate.parse(fin), cada,
+                unidad == null ? null : Temporada.Unidad.valueOf(unidad));
+    }
+
+    /** Aviso si el producto no se vende en cierto plazo; nulo lo quita. */
+    public void guardarAviso(Connection c, String productoId, AvisoSinVenta aviso) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE productos SET aviso_plazo = ?, aviso_unidad = ?, aviso_admin = ?, aviso_supervisor = ?,
+                                     aviso_caja = ?
+                WHERE id = ?""")) {
+            if (aviso == null) {
+                ps.setNull(1, Types.INTEGER);
+                ps.setNull(2, Types.VARCHAR);
+            } else {
+                ps.setInt(1, aviso.plazo());
+                ps.setString(2, aviso.unidad().name());
+            }
+            ps.setBoolean(3, aviso != null && aviso.administrador());
+            ps.setBoolean(4, aviso != null && aviso.supervisor());
+            ps.setBoolean(5, aviso != null && aviso.caja());
+            ps.setString(6, productoId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Ventana de temporada de un producto; nulo la quita (junto con su repetición). */
+    public void guardarTemporada(Connection c, String productoId, Temporada t) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("""
+                UPDATE productos SET temporada_desde = ?, temporada_fin = ?, temporada_repetir_cada = ?,
+                                     temporada_repetir_unidad = ?
+                WHERE id = ?""")) {
+            if (t == null) {
+                ps.setNull(1, Types.VARCHAR);
+                ps.setNull(2, Types.VARCHAR);
+            } else {
+                ps.setString(1, t.desde().toString());
+                ps.setString(2, t.fin().toString());
+            }
+            if (t == null || !t.repite()) {
+                ps.setNull(3, Types.INTEGER);
+                ps.setNull(4, Types.VARCHAR);
+            } else {
+                ps.setInt(3, t.repetirCada());
+                ps.setString(4, t.repetirUnidad().name());
+            }
+            ps.setString(5, productoId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Gramos con hasta 6 decimales (se admiten microgramos); nulo si no se ha capturado. */
+    private static BigDecimal gramos(ResultSet rs, String columna) throws SQLException {
+        double valor = rs.getDouble(columna);
+        return rs.wasNull() ? null : BigDecimal.valueOf(valor).setScale(6, RoundingMode.HALF_UP).stripTrailingZeros();
+    }
+
+    private static String vacioANull(String texto) {
+        return texto == null || texto.isBlank() ? null : texto.strip();
+    }
+
+    /** Porcentaje sin ceros de más (5.0 → 5). */
+    static BigDecimal porcentaje(double valor) {
+        BigDecimal limpio = BigDecimal.valueOf(valor).stripTrailingZeros();
+        return limpio.scale() < 0 ? limpio.setScale(0) : limpio;
+    }
+
+    static BigDecimal decimal(ResultSet rs, String columna) throws SQLException {
+        return BigDecimal.valueOf(rs.getDouble(columna)).setScale(3, RoundingMode.HALF_UP);
+    }
+
+    static BigDecimal decimal(ResultSet rs, int columna) throws SQLException {
+        return BigDecimal.valueOf(rs.getDouble(columna)).setScale(3, RoundingMode.HALF_UP);
+    }
+}
